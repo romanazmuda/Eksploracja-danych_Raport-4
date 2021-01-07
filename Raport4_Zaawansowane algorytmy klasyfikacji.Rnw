@@ -1,0 +1,1280 @@
+\documentclass{article}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% dodatkowe pakiety LaTeX'a
+\usepackage[OT4]{polski}
+\usepackage[utf8]{inputenc}
+\usepackage[top=2.5cm, bottom=2.5cm, left=2cm, right=2cm]{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage[colorlinks=true, linkcolor=blue]{hyperref}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% ustawienia globalne
+<<ustawienia_globalne, echo=FALSE, warning=FALSE, message=FALSE>>=
+library(knitr)
+library(datasets)
+library(xtable) 
+library(dplyr)
+library(plyr)
+library(moments)
+library(e1071)
+library(MASS)
+library(cluster)
+library(corrplot)
+
+opts_chunk$set(fig.path='figure/', fig.align='center', fig.pos='H',fig.width=5, fig.height=4)
+
+@
+\begin{document}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% strona tytulowa
+
+\title{Raport 4 \\ Zaawansowane algorytmy klasyfikacji \\  Analiza skupień}
+
+\author{Romana Żmuda & 249706 \\ Adrian Kit  & 249746}
+
+\maketitle
+\tableofcontents
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Zadanie 1 -  Zaawansowane metody klasyfikacji}
+
+W tym sprawozdaniu kontynuujemy rozważania z Raportu 3 dotyczące danych o winach. Tym tazem skorzystamy z bardziej zaawansowanych metod, takich jak lasy losowe czy algorytmy bagging lub boosting. Porównamy je z metodami użytymi w poprzednim raporcie i na tej podstawie wybierzemy najlepszą z nich. 
+\subsection{ Rodziny klasyfikatorów -  bagging, boosting, random forest}
+%v1
+<<v1, echo=FALSE, warning=FALSE, message=FALSE>>=
+library(e1071)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(adabag)
+library(ipred)
+library(mlbench)
+library(xtable)
+library(HDclassif)
+data(wine)
+colnames(wine) <- c('Type', 'Alcohol', 'Malic', 'Ash', 
+                      'Alcalinity', 'Magnesium', 'Phenols', 
+                      'Flavanoids', 'Nonflavanoids',
+                      'Proanthocyanins', 'Color', 'Hue', 
+                      'Dilution', 'Proline')
+wine$Type <- as.factor(wine$Type)
+
+mydata<-wine
+attach(mydata)
+
+set.seed(1)
+n<-dim(mydata)[1]
+n.learning<-floor(2*n/3)
+n.test<-n-n.learning
+learning.index <- sample(1:n, n.learning)
+learning.index<-sort(learning.index)
+learning.set<-mydata[learning.index,]
+test.set <- mydata[-learning.index,]
+learning.set1<-learning.set[,c(1,7,8)]
+test.set1<-test.set[,c(1,7,8)]
+etykietki.rzecz.t <- test.set$Type
+etykietki.rzecz.l<-learning.set$Type
+@
+
+\subsection{Rodziny klasyfikatorów}
+W tym zadaniu omówimy działanie algorytmów {\em bagging}, {\em AdaBoost} (jako wariant algorytmu {\em boosting}) oraz {\em random forest} (lasy losowe). Wykorzystamy  dane {\em wine} z pakietu "HDClassif". Celem będzie zbadanie dokładności oraz porównanie ich z drzewem losowym z poprzedniego raportu oraz między sobą tak, by wybrać ten najefektywniejszy.
+
+\\By zachować pełną analogię względem poprzedniego raportu analizę przeprowadzimy z podziałem na zbiór uczący i testowy. Dodatkowo, porównamy wyniki otrzymane przy badaniu całego zbioru danych względem zmiennych, które wybralismy jako te o najlepszej zdolności dyskryminacyjnej, czyli: Phenols i Flavanoids.
+
+\\Jedyną zmianą będzie ustawienie ziarna generatora, dzięki czemu otrzymamy stałe wyniki. Musimy zatem na nowo przeanalizować algorytm drzewa klasyfikacyjnego.
+\subsubsection{Pojedyncze drzewo klasyfikacyjne}
+\paragraph{Cały zbiór danych}
+\begin{itemize}
+%ab1
+<<ab1, echo=F, eval=T>>=
+library(rpart)
+library(rpart.plot)
+tree <- rpart(Type~., data=learning.set)
+@
+\item Grupa ucząca 
+
+Macierz błędu:
+%ab2
+<<ab2,echo=F, eval=T, results='asis'>>=
+tree.pred.l<-predict(tree, newdata = learning.set,type='class')
+tree.macierz.l<-table(etykietki.rzecz.l,tree.pred.l)
+colnames(tree.macierz.l)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(tree.macierz.l,caption="Macierz pomyłek - drzewo klasyfikacyjne, grupa ucząca",label="tab1"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab3
+<<ab3,echo=F,eval=T>>=
+tree.blad.l<-(n.learning-sum(diag(table(etykietki.rzecz.l,tree.pred.l))))/n.learning
+tree.blad.l
+@
+
+\item Grupa testowa
+
+Macierz błędu:
+%ab4
+<<ab4,echo=F, eval=T,results='asis'>>=
+tree.pred.t<-predict(tree, newdata = test.set,type='class')
+tree.macierz.t<-table(etykietki.rzecz.t,tree.pred.t)
+colnames(tree.macierz.t)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(tree.macierz.t,caption="Macierz pomyłek - drzewo klasyfikacyjne, grupa testowa",label="tab2"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab5
+<<ab5,echo=F,eval=T>>=
+tree.blad.t<-(n.test-sum(diag(table(etykietki.rzecz.t,tree.pred.t))))/n.test
+tree.blad.t
+@
+
+\end{itemize}
+
+
+\paragraph{Zmienne o najlepszej zdolności dyskryminacyjnej}
+
+\begin{itemize}
+%ab6
+<<ab6, echo=F, eval=T>>=
+tree1 <- rpart(Type~., data=learning.set1)
+@
+\item Grupa ucząca 
+
+Macierz błędu:
+%ab7
+<<ab7,echo=F, eval=T,results='asis'>>=
+tree.pred.l1<-predict(tree1, newdata = learning.set1,type='class')
+tree.macierz.l1<-table(etykietki.rzecz.l,tree.pred.l1)
+colnames(tree.macierz.l1)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(tree.macierz.l1,caption="Macierz pomyłek - drzewo klasyfikacyjne, grupa ucząca",label="tab3"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab8
+<<ab8,echo=F,eval=T>>=
+tree.blad.l1<-(n.learning-sum(diag(table(etykietki.rzecz.l,tree.pred.l1))))/n.learning
+tree.blad.l1
+@
+
+\item Grupa testowa
+
+Macierz błędu:
+%ab9
+<<ab9,echo=F, eval=T,results='asis'>>=
+tree.pred.t1<-predict(tree1, newdata = test.set1,type='class')
+tree.macierz.t1<-table(etykietki.rzecz.t,tree.pred.t1)
+colnames(tree.macierz.t1)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(tree.macierz.t1,caption="Macierz pomyłek - drzewo klasyfikacyjne, grupa testowa",label="tab4"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab10
+<<ab10,echo=F,eval=T>>=
+tree.blad.t1<-(n.test-sum(diag(table(etykietki.rzecz.t,tree.pred.t1))))/n.test
+tree.blad.t1
+@
+\end{itemize}
+
+Obserwacje:
+\begin{itemize}
+\item Cały zbiór: Błąd na poziomie mniej niż 1\% dla zbioru uczącego do około 7\% dla testowego, co zgadza się z wynikami z poprzedniego raportu.
+\item Zmienne o najlepszej zdolności dyskryminacyjnej: Błąd na poziomie mniej niż 16\% dla zbioru uczącego do około 28\% dla testowego, co jest nieco gorszym rezultatem względem  poprzedniego raportu (tam 14-22\%).
+\end{itemize}
+
+
+\subsubsection{Algorytm {\em bagging}}
+Zaczniemy od wykresu zmiany błędu klasyfikacji względem liczby replikacji. Użyjemy całego zbioru danych:
+
+\newpage
+%ab11
+<<ab11, echo=F,eval=T, fig=T, fig.cap="Bagging. Zależność dokładności od liczby replikacji B">>=
+library(ipred)
+B.vector <- c(1, 5, 10, 20, 30, 40, 50, 70, 100)
+bagging.error.rates <- sapply(B.vector, function(b)  {errorest(Type~., data=mydata, model=bagging, nbagg=b, estimator="632plus", est.para=control.errorest(nboot = 20))$error})
+plot(B.vector, bagging.error.rates, xlab="B", main="Bagging: error rate vs. B", type="b")
+grid()
+@
+
+Optymalna liczba replikacji wynosi 50, (najniższa wartość na wykresie) takiej też użyjemy w naszych rozważaniach.
+
+\paragraph{Cały zbiór danych}
+
+
+\begin{itemize}
+%ab12
+<<ab12, echo=F, eval=T>>=
+btree <- bagging(Type~., data=learning.set, nbagg=50, minsplit=1, cp=0)
+@
+\item Grupa ucząca 
+
+Macierz błędu:
+%ab13
+<<ab13,echo=F, eval=T,results='asis'>>=
+prog.etyk.l<-predict(btree,newdata = learning.set)
+bagging.macierz.l<-table(etykietki.rzecz.l,prog.etyk.l)
+colnames(bagging.macierz.l)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(bagging.macierz.l,caption="Macierz pomyłek - bagging, grupa ucząca",label="tab5"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab14
+<<ab14,echo=F,eval=T>>=
+bagging.blad.l<-(n.learning-sum(diag(bagging.macierz.l)))/n.learning
+bagging.blad.l
+@
+
+
+\item Grupa testowa
+
+Macierz błędu:
+%ab15
+<<ab15,echo=F, eval=T,results='asis'>>=
+prog.etyk.t<- predict(btree,test.set)
+bagging.macierz.t<-table(etykietki.rzecz.t,prog.etyk.t)
+colnames(bagging.macierz.t)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(bagging.macierz.t,caption="Macierz pomyłek - bagging, grupa testowa",label="tab6"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab16
+<<ab16,echo=F,eval=T>>=
+bagging.blad.t<-(n.test-sum(diag(bagging.macierz.t)))/n.test
+bagging.blad.t
+@
+
+\end{itemize}
+
+
+\paragraph{Zmienne o najlepszej zdolności dyskryminacyjnej}
+
+\begin{itemize}
+%ab17
+<<ab17, echo=F, eval=T>>=
+btree1 <- bagging(Type~., data=learning.set1, nbagg=50, minsplit=1, cp=0)
+@
+\item Grupa ucząca 
+
+Macierz błędu:
+%ab18
+<<ab18,echo=F, eval=T,results='asis'>>=
+prog.etyk.l1<-predict(btree1,newdata = learning.set1)
+bagging.macierz.l1<-table(etykietki.rzecz.l,prog.etyk.l1)
+colnames(bagging.macierz.l1)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(bagging.macierz.l1,caption="Macierz pomyłek - bagging, grupa ucząca",label="tab7"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab19
+<<ab19,echo=F,eval=T>>=
+bagging.blad.l1<-(n.learning-sum(diag(bagging.macierz.l1)))/n.learning
+bagging.blad.l1
+@
+
+\item Grupa testowa
+
+Macierz błędu:
+%ab20
+<<ab20,echo=F, eval=T,results='asis'>>=
+prog.etyk.t1<- predict(btree1,test.set1)
+bagging.macierz.t1<-table(etykietki.rzecz.t,prog.etyk.t1)
+colnames(bagging.macierz.t1)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(bagging.macierz.t1,caption="Macierz pomyłek - bagging, grupa testowa",label="tab8"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab21
+<<ab21,echo=F,eval=T>>=
+bagging.blad.t1<-(n.test-sum(diag(bagging.macierz.t1)))/n.test
+bagging.blad.t1
+@
+
+\end{itemize}
+
+Obserwacje:
+\begin{itemize}
+\item Cały zbiór: Błąd na poziomie 0 \% dla zbioru uczącego do około 3\% dla testowego.
+
+\item Zmienne o najlepszej zdolności dyskryminacyjnej: Błąd na poziomie 0\% dla zbioru uczącego do około 32\% dla testowego.
+\end{itemize}
+
+\subsubsection{Algorytm AdaBoost}
+%ab22
+<<ab22,echo=F, eval=T>>=
+mypredict.rpart <- function(object, newdata)  predict(object, newdata=newdata, type="class")
+
+mypredict.boosting <- function(object, newdata){
+  return(as.factor(predict.boosting(object, newdata=newdata)$class))
+}
+@
+
+
+\\Zaczniemy od przedstawienia tego, jak zmienia się błąd klasyfikacji w zależności od liczby wykonywanych w algorytmie iteracji. Zmieniamy metodę Z 632+ na "predict boosting" dla całego zbioru danych celem optymalizacji czasu kompilacji.
+
+
+%ab23
+<<ab23,echo=F, eval=T, fig=T, fig.cap="AdaBoost. Zależność dokładności od liczby iteracji M">>=
+library(adabag)
+M.vector<-1:14
+boosting.errors <- sapply(M.vector, function(m)  {predict.boosting(boosting(Type~., data=mydata, mfinal=m),newdata=mydata)$error})
+plot(M.vector, boosting.errors, xlab="M", main="Boosting: error rate vs. M", type="b")
+grid()
+@
+
+Od M=4 mamy stałą wartość błędu bliską 0, stąd dalszą analizę przeprowadzimy dla M=4 iteracji. Wyniki porównamy z M=10 iteracjami.
+
+\paragraph{Cały zbiór danych}
+
+
+\begin{itemize}
+%ab24
+<<ab24, echo=F, eval=T>>=
+adaboost<-boosting(Type~., data=learning.set,mfinal = 10)
+@
+\item Grupa ucząca 
+
+Macierz błędu:
+%ab25
+<<ab25,echo=F, eval=T,results='asis'>>=
+boost.prog.etyk.l<-as.factor(predict.boosting(adaboost,newdata=learning.set)$class)
+boosting.macierz.l<-table(etykietki.rzecz.l,boost.prog.etyk.l)
+colnames(boosting.macierz.l)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(boosting.macierz.l,caption="Macierz pomyłek - boosting, grupa ucząca",label="tab9"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab26
+<<ab26,echo=F,eval=T>>=
+boosting.blad.l<-(n.learning-sum(diag(boosting.macierz.l)))/n.learning
+boosting.blad.l
+@
+
+\item Grupa testowa
+
+Macierz błędu:
+%ab27
+<<ab27,echo=F, eval=T,results='asis'>>=
+pred.adaboost.t<-predict.boosting(adaboost,newdata = test.set)
+boost.prog.etyk.t<-as.factor(pred.adaboost.t$class)
+boosting.macierz.t<-table(etykietki.rzecz.t,boost.prog.etyk.t)
+colnames(boosting.macierz.t)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(boosting.macierz.t,caption="Macierz pomyłek - boosting, grupa testowa",label="tab10"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab28
+<<ab28,echo=F,eval=T>>=
+boosting.blad.t<-(n.test-sum(diag(boosting.macierz.t)))/n.test
+boosting.blad.t
+@
+
+\end{itemize}
+
+\paragraph{Zmienne o najlepszej zdolności dyskryminacyjnej}
+
+
+\begin{itemize}
+%ab29
+<<ab29, echo=F, eval=T>>=
+adaboost1<-boosting(Type~., data=learning.set1,mfinal = 10)
+@
+\item Grupa ucząca 
+
+Macierz błędu:
+%ab30
+<<ab30,echo=F, eval=T,results='asis'>>=
+boost.prog.etyk.l1<-as.factor(predict.boosting(adaboost1,newdata=learning.set1)$class)
+boosting.macierz.l1<-table(etykietki.rzecz.l,boost.prog.etyk.l1)
+colnames(boosting.macierz.l1)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(boosting.macierz.l1,caption="Macierz pomyłek - boosting, grupa ucząca",label="tab11"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab31
+<<ab31,echo=F,eval=T>>=
+boosting.blad.l1<-(n.learning-sum(diag(boosting.macierz.l1)))/n.learning
+boosting.blad.l1
+@
+
+\item Grupa testowa
+
+Macierz błędu:
+%ab32
+<<ab32,echo=F, eval=T,results='asis'>>=
+pred.adaboost.t1<-predict.boosting(adaboost1,newdata = test.set1)
+boost.prog.etyk.t1<-as.factor(pred.adaboost.t1$class)
+boosting.macierz.t1<-table(etykietki.rzecz.t,boost.prog.etyk.t1)
+colnames(boosting.macierz.t1)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(boosting.macierz.t1,caption="Macierz pomyłek - boosting, grupa testowa",label="tab12"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab33
+<<ab33,echo=F,eval=T>>=
+boosting.blad.t1<-(n.test-sum(diag(boosting.macierz.t1)))/n.test
+boosting.blad.t1
+@
+
+\end{itemize}
+
+Obserwacje:
+\begin{itemize}
+\item Cały zbiór: Błąd na poziomie mniej niż 2\% dla zbioru uczącego do  5\% dla testowego. Po zmianie na M = 10 błąd spada do 0 dla obu zbiorów.
+\item Zmienne o najlepszej zdolności dyskryminacyjnej: Błąd na poziomie mniej niż 14\% dla zbioru uczącego do około 20\% dla testowego. Po zmianie na M=10 wartość błędu zmienia się na odpowiednio 8\% i 28\%. 
+\end{itemize}
+
+\subsubsection{Lasy losowe}
+
+Klasycznie dla tego zadania rozpoczynamy od wykresu zależności dokładności od liczby drzew dla całego zbioru.  
+%ab34
+<<ab34, echo=F, eval=T, fig=T, fig.cap="Random forest. Zależność dokładności od liczby drzew T">>=
+p <-  ncol(mydata) - 1
+T.vector<-c(10,20,50,70,100,120,150,170,200)
+rf.error.rates <- sapply(T.vector, function(t)  {errorest(Type~., data=mydata, model=randomForest, ntree=t, mtry=sqrt(p),estimator="632plus", est.para=control.errorest(nboot = 20))$error})
+plot(T.vector, rf.error.rates, xlab="T", main="Random forest: error rate vs. T", type="b",)
+grid()
+@
+
+Wzrost liczby drzew nie gwarantuje minimalizacji błędu, optymalna wartość T =120 drzew.
+
+\paragraph{Cały zbiór danych}
+
+
+\begin{itemize}
+%ab35
+<<ab35, echo=F, eval=T>>=
+rf <- randomForest(Type~., data=learning.set, ntree=120, mtry=sqrt(p), importance=TRUE)
+@
+
+\item Grupa ucząca 
+
+Macierz błędu:
+%ab36
+<<ab36,echo=F, eval=T,results='asis'>>=
+pred.labels.l<-rf$predicted
+rf.macierz.l<-table(etykietki.rzecz.l,pred.labels.l)
+colnames(rf.macierz.l)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(rf.macierz.l,caption="Macierz pomyłek - random forest, grupa ucząca",label="tab13"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab37
+<<ab37,echo=F,eval=T>>=
+rf.blad.l<-(n.learning-sum(diag(rf.macierz.l)))/n.learning
+
+rf.blad.l
+@
+
+\item Grupa testowa
+
+Macierz błędu:
+%ab38
+<<ab38,echo=F, eval=T,results='asis'>>=
+pred.labels.t <- predict(rf, newdata=test.set, type="class")
+rf.macierz.t<-table(etykietki.rzecz.t, pred.labels.t)
+colnames(rf.macierz.t)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(rf.macierz.t,caption="Macierz pomyłek - random forest, grupa testowa",label="tab14"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab39
+<<ab39,echo=F,eval=T>>=
+rf.blad.t<-(n.test-sum(diag(rf.macierz.t)))/n.test
+rf.blad.t
+@
+
+\end{itemize}
+
+\paragraph{Zmienne o najlepszej zdolności dyskryminacyjnej}
+
+
+\begin{itemize}
+%ab40
+<<ab40, echo=F, eval=T>>=
+p1 <-  ncol(learning.set1) - 1
+rf1 <- randomForest(Type~., data=learning.set1, ntree=120, mtry=sqrt(p1), importance=TRUE)
+@
+
+\item Grupa ucząca 
+
+Macierz błędu:
+%ab41
+<<ab41,echo=F, eval=T,results='asis'>>=
+pred.labels.l1<-rf1$predicted
+rf.macierz.l1<-table(etykietki.rzecz.l,pred.labels.l1)
+colnames(rf.macierz.l1)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(rf.macierz.l1,caption="Macierz pomyłek - random forest, grupa ucząca",label="tab15"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab42
+<<ab42,echo=F,eval=T>>=
+rf.blad.l1<-(n.learning-sum(diag(rf.macierz.l1)))/n.learning
+
+rf.blad.l1
+@
+
+\item Grupa testowa
+
+Macierz błędu:
+%ab43
+<<ab43,echo=F, eval=T,results='asis'>>=
+pred.labels.t1 <- predict(rf1, newdata=test.set1, type="class")
+rf.macierz.t1<-table(etykietki.rzecz.t, pred.labels.t1)
+colnames(rf.macierz.t1)<-paste0(c('1', '2','3')," \n- przewidywane")
+print(xtable(rf.macierz.t1,caption="Macierz pomyłek - random forest, grupa testowa",label="tab16"),table.placement = "H")
+@
+
+Błąd klasyfikacyjny:
+%ab44
+<<ab44,echo=F,eval=T>>=
+rf.blad.t1<-(n.test-sum(diag(rf.macierz.t1)))/n.test
+rf.blad.t1
+@
+
+\end{itemize}
+Obserwacje:
+\begin{itemize}
+\item Cały zbiór: Błąd na poziomie 2\% dla obu zbiorów. Po zmianie na T = 60 błąd ptaktycznie się nie zmienia.
+\item Zmienne o najlepszej zdolności dyskryminacyjnej: Błąd na poziomie 24-25\% dla obu grup. Po zmianie na T=60 rezultaty są niemal identyczne. 
+\item Wyniki nie zmieniają się mocno względem zbioru uczącego i testowego, z czym nie mieliśmy wcześniej do czynienia. Oprócz tego potwierdziliśmy, że zwiększenie ilości drzew T nie zmienia bardzo dokładności. 
+\end{itemize}
+
+
+\subsubsection{Porównanie metod}
+Wyliczamy błąd klasyfikacyjny za pomocą metody632+
+%ab45
+<<ab45, warning=FALSE>>=
+p <-  ncol(mydata) - 1
+error.tree         <- (errorest(Type~., data=mydata, model=rpart, predict=mypredict.rpart,estimator="632plus", est.para=control.errorest(nboot = 20)))
+error.tree$error #drzewo
+
+error.bagging      <- (errorest(Type~., data=mydata, model=bagging, nbagg=50, minsplit=1,cp=0,estimator="632plus", est.para=control.errorest(nboot = 20)))
+error.bagging$error #bagging
+
+error.randomForest <- (errorest(Type~., data=mydata, model=randomForest,ntree=120,mtry=floor(sqrt(p)),estimator="632plus", est.para=control.errorest(nboot = 20)))
+error.randomForest$error #las
+
+error.boost <- (errorest(Type~., data=mydata, model=boosting, predict=mypredict.boosting,mfinal=10,estimator="632plus", est.para=control.errorest(nboot = 20)))
+error.boost$error #ada
+
+error.tree1         <- (errorest(Type~., data=mydata[,c(1,7,8)], model=rpart, predict=mypredict.rpart,estimator="632plus", est.para=control.errorest(nboot = 20)))
+error.tree1$error #drzewo podzbiór
+
+error.bagging1      <- (errorest(Type~., data=mydata[,c(1,7,8)], model=bagging, nbagg=50, minsplit=1,cp=0,estimator="632plus", est.para=control.errorest(nboot = 20)))
+error.bagging1$error #bagging podzbiór
+
+error.randomForest1 <- (errorest(Type~., data=mydata[,c(1,7,8)], model=randomForest,ntree=120,mtry=floor(sqrt(p)),estimator="632plus", est.para=control.errorest(nboot = 20)))
+error.randomForest1$error #las podzbiór
+
+error.boost1 <- (errorest(Type~., data=mydata[,c(1,7,8)], model=boosting, predict=mypredict.boosting,mfinal=10,estimator="632plus", est.para=control.errorest(nboot = 20)))
+error.boost1$error #ada podzbiór
+@
+Wyliczamy redukcję błędu całego zbioru danych:
+%ab46
+<<%ab46>>=
+tree.bagg<-(error.tree$error - error.bagging$error)/error.tree$error*100  
+tree.bagg
+
+tree.rf<-(error.tree$error - error.randomForest$error)/error.tree$error*100   
+tree.rf
+
+tree.boost<-(error.tree$error - error.boost$error)/error.tree$error*100
+tree.boost
+
+#Pozdbiór:
+t.bagg<-(tree.blad.t - bagging.blad.t)/tree.blad.t*100
+t.bagg
+t.boost<-(tree.blad.t - boosting.blad.t)/tree.blad.t*100
+t.boost
+t.rf<-(tree.blad.t - rf.blad.t)/tree.blad.t*100
+t.rf
+@
+Wyliczamy redukcję błędu dla pozdbioru danych o najlpeszej zdolności dyskryminacyjnej:
+%ab47
+<<ab47>>=
+tree.bagg1<-(error.tree1$error - error.bagging1$error)/error.tree1$error*100  
+tree.bagg1
+
+tree.rf1<-(error.tree1$error - error.randomForest1$error)/error.tree1$error*100   
+tree.rf1
+
+tree.boost1<-(error.tree1$error - error.boost1$error)/error.tree1$error*100
+tree.boost1
+
+#Pozdzbiór:
+t.bagg1<-(tree.blad.t1 - bagging.blad.t1)/tree.blad.t1*100
+t.bagg1
+t.boost1<-(tree.blad.t1 - boosting.blad.t1)/tree.blad.t1*100
+t.boost1
+t.rf1<-(tree.blad.t1 - rf.blad.t1)/tree.blad.t1*100
+t.rf1
+@
+
+Wyniki otrzymane metodą macierzy pomyłek dla zbioru testowego wszystkich danych oraz zmiennych o najlepszej zdolności dyskryminacyjnej porównamy z otrzymanymi metodą 632+ dla całego zbioru. Wyznaczymy względną redukcję błędu dla każdego algorytmu.
+\begin{itemize}
+\item BAGGING vs DRZEWO \newline
+\NEWLINE -CAŁY ZBIÓR: Błąd klasyfikacyjny: 3,3\% do 6,7\% w przypadku macierzy pomyłek, co daje redukcję błędu na poziomie 50\%,  3,4\% do 9,3\% w przypadku metody 632+, co daje 63,5\% redukcji błędu. \\
+
+\NEWLINE -ZMIENNE O NAJLEPSZEJ ZDOLNOŚCI DYSKRYMINACYJNEJ: 31,7\% do 28,3\% w przypadku macierzy pomyłek (brak redukcji błędu), 19,2\% do 21,4\% metodą 632+, co daję redukcję błędu na poziomie 10\% \\
+
+
+\item BOOSTING vs DRZEWO \newline
+\NEWLINE -CAŁY ZBIÓR: Błąd klasyfikacyjny: 0\% do 6,7\% w przypadku macierzy pomyłek, co daje redukcję błędu na poziomie 100\%,  2,5\% do 9,3\% w przypadku metody 632+, co daje 73\% redukcji błędu. \\
+
+\NEWLINE -ZMIENNE O NAJLEPSZEJ ZDOLNOŚCI DYSKRYMINACYJNEJ: 28,3\% do 28,3\% w przypadku macierzy pomyłek (brak redukcji błędu), 21,1\% do 21,4\% metodą 632+, co daję redukcję błędu na poziomie 1,4\% \\
+
+
+\item LASY LOSOWE vs DRZEWO \newline
+\NEWLINE -CAŁY ZBIÓR: Błąd klasyfikacyjny: 1,7\% do 6,7\% w przypadku macierzy pomyłek, co daje redukcję błędu na poziomie 75\%,  1,2\% do 9,3\% w przypadku metody 632+, co daje 87\% redukcji błędu. \\
+
+\NEWLINE -ZMIENNE O NAJLEPSZEJ ZDOLNOŚCI DYSKRYMINACYJNEJ: 25\% do 28,3\% w przypadku macierzy pomyłek (redukcja na poziomie 11,8\%), 20,2\% do 21,4\% metodą 632+, co daję redukcję błędu na poziomie 5,8\%
+
+\subsubsection{Wybór najistotniejszych zmiennych}
+
+Które zmienne są najistotniejsze według algorytmu random forest?
+%ab46
+<<ab46,echo=F,eval=T,fig=T, fig.cap="Ranking cech według metody lasów losowych">>=
+varImpPlot(randomForest(Type~., data=mydata, ntree=120, mtry=sqrt(p1), importance=TRUE),main = "Variable Importance Plot")
+@
+
+
+Proline i Flavanoids przodują w rankingu. Pierwsza z nich być może przez dużą wariancję, druga była w gronie zmiennych o najlepszej zdolności dyskryminacyjnej. Dalej mamy Hue i Alcohol. Co ciekawe, zmienna Phenols miała drugą najlepszą zdolność dyskryminacyjną, jednak w tym zestawieniu uplasowała się dokładnie pośrodku. Najgorsza wydaje się być zmienna Nonflavanoids.
+\newpage
+\subsubsection{Podsumowanie}
+\begin{itemize}
+
+\item Algorytmem zapewniającym największą redukcję błędu całego zbioru danych jest AdaBoost, jednak w przypadku zmiennych o wysokiej zdolności dyskryminacyjnej nie jest już tak efektowny (raptem 1,4\%). Jeśli dodamy do tego ogromnie długi czas pracy (najdłuższy ze wszystkich algorytmów), okaże się, że lepszym wyborem są lasy losowe. 
+
+\item Lasy losowe nieznacznie gorzej prezentują się gdy analizujemy cały zbiór danych, jednak dają więcej gdy analizujemy podzbiór danych o wysokiej zdolności dyskryminacyjnej. Dodając do tego średni czas pracy, uzyskujemy najlepszy algorytm z naszego zestawienia. 
+
+\item Najsłabszy jest algorytm bagging (ponad 50\% różnicy między drugim AdaBoostem). Jego jedyną zaletą jest to, że jest najszybszy w naszym zestawieniu
+
+\end{itemize}
+
+
+\subsection{Metoda wektorów nośnych - SVM}
+U podstaw metody wektorów nośnych (Support Vector Machines - SVM) leży koncepcja przestrzeni decyzyjnej, którą dzieli się budując granice separujące obiekty o różnej przynależności klasowej. 
+\subsubsection{SVM - jądro liniowe i różne wartości parametru kosztu C}
+Rożważmy jądro liniowe, a więc problem doboru optymalnej wartości kosztu C, która określa szerokość pasma oraz wpływa na dokładność klasyfikacji. W naszych danych z pakietu \textsl{HDclassif} o nazwie "WINE" wiemy, że zmienną o zdolnościach klasyfikacyjnych jest cecha TYPE. Stworzymy dwa modele SVM, jeden oparty na całym zbiorze danych oraz drugi na wybieranych trzech zmienne(Proline, Colors, Flavanoids), które we wcześniejszym raporcie uznaliśmy za jedne z najlepszych do podziału na tym zbiorze.
+
+
+% e1
+<< e1, echo=FALSE, warning=FALSE,message=FALSE >>=
+library(HDclassif)
+data(wine)
+colnames(wine) <- c('Type', 'Alcohol', 'Malic', 'Ash', 
+                      'Alcalinity', 'Magnesium', 'Phenols', 
+                      'Flavanoids', 'Nonflavanoids',
+                      'Proanthocyanins', 'Color', 'Hue', 
+                      'Dilution', 'Proline')
+wine$Type <- as.factor(wine$Type)
+wine.scale<-scale(wine[,-1])
+wine.scale<-data.frame(wine.scale)
+wine1<-cbind(wine$Type, wine.scale)
+colnames(wine1) <- c('Type', 'Alcohol', 'Malic', 'Ash', 
+                      'Alcalinity', 'Magnesium', 'Phenols', 
+                      'Flavanoids', 'Nonflavanoids',
+                      'Proanthocyanins', 'Color', 'Hue', 
+                      'Dilution', 'Proline')
+attach(wine1)
+
+library(mlbench)
+library(e1071)
+set.seed(123)
+
+n <- nrow(wine1)
+learn.ind    <- sample(1:n, 2/3*n)
+training.set <- wine1[learn.ind,] #zbiór uczący dla całych danych
+test.set     <- wine1[-learn.ind,] #zbiór testowy dla całych danych
+@
+Na stworzonych modelach z jądrami liniowymi porównany wykresy od zmiennych tworzących te modele (Proline i Colors) oraz zbadamy róznice, jak kształtuje się podziału na klasy i ich przyporządkowania, gdy wykres narysuje od zmiennych Proline i Hue, gdzie zmienna Hue nie tworzyła modelu drugiego.
+\newline
+\begin{itemize}
+\item Parametr kosztu:  $ C = 0.1$.
+Tworzymy odpowiednie modele: 
+% e2
+<< e2, echo=TRUE, warning=FALSE,message=FALSE >>=
+#1.  cały zbiór
+svm.linear.C0.1.all <- svm(Type~., data=training.set, kernel="linear", cost=.1) 
+#2.  zmienne Proline, Color, Flavanoids
+svm.linear.C0.1.sub <- svm(Type~Proline+Color+Flavanoids, data=training.set, kernel="linear", cost=.1) 
+@
+Poniżej porównanie podziału na zbiorze uczącym do właściwych Typów Win, gdzie: 
+\begin{itemize}
+\item Czarny - Typ 1
+\item Czerowny - Typ 2
+\item Zielony - Typ 3
+\end{itemize}
+Wykresy dwóch modelów SVM dla $ C = 0.1$ dla zmiennych $Proline$ i $Color$.
+% e54
+<< e54, echo=FALSE, warning=FALSE,message=FALSE, fig.cap="C=0.1, Zmienne występujące">>=
+par(mfrow=c(1,2), mar=c(3.8,3.8,3.8,2))
+plot(svm.linear.C0.1.all, data=training.set, Proline~Color, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 1 - C = 0.1")
+plot(svm.linear.C0.1.sub, data=training.set, Proline~Color, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 2 - C = 0.1")
+@
+Oraz dla tej samej wartości C, ale dla zmiennych $Proline$ i $Hue$
+% e55
+<< e55, echo=FALSE, warning=FALSE,message=FALSE, fig.cap="C=0.1, Jedna zmienna niewystępująca">>=
+par(mfrow=c(1,2), mar=c(3.8,3.8,3.8,2))
+plot(svm.linear.C0.1.all, data=training.set, Proline~Hue, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 1 - C = 0.1")
+plot(svm.linear.C0.1.sub, data=training.set, Proline~Hue, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 2 - C = 0.1")
+@
+
+
+\item Parametr kosztu: $ C=1$
+Tworzymy odpowiednie modele: 
+% e4
+<< e4, echo=FALSE, warning=FALSE,message=FALSE >>=
+#1.  cały zbiór
+svm.linear.C1.all <- svm(Type~., data=training.set, kernel="linear", cost=1) 
+#2. zmienne Proline, Color, Flavanoids
+svm.linear.C1.sub <- svm(Type~Proline+Color+Flavanoids, data=training.set, kernel="linear", cost=1) 
+@
+Wykresy dwóch modelów SVM dla $ C = 1 $ dla Zmiennych $Proline$ i $Color$
+% e56
+<< e56, echo=FALSE, warning=FALSE,message=FALSE, fig.cap="C=1, Zmienne występujące">>=
+par(mfrow=c(1,2), mar=c(3.8,3.8,3.8,2))
+plot(svm.linear.C1.all, data=training.set, Proline~Color, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 1 - C = 1")
+plot(svm.linear.C1.sub, data=training.set, Proline~Color, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 2 - C = 1")
+@
+Oraz dla tej samej wartości C, ale dla zmiennych $Proline$ i $Hue$
+% e57
+<< e57, echo=FALSE, warning=FALSE,message=FALSE, fig.cap="C=1, Jedna zmienna niewystępująca">>=
+par(mfrow=c(1,2), mar=c(3.8,3.8,3.8,2))
+plot(svm.linear.C1.all, data=training.set, Proline~Hue, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 1 - C = 1")
+plot(svm.linear.C1.sub, data=training.set, Proline~Hue, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 2 - C = 1")
+@
+
+
+\item Parametr kosztu $C=20$
+Tworzymy odpowiednie modele: 
+% e3
+<< e3, echo=FALSE, warning=FALSE,message=FALSE >>=
+#1.  cały zbiór
+svm.linear.C20.all <- svm(Type~., data=training.set, kernel="linear", cost=20) 
+#2. zmienne Proline, Color, Flavanoids
+svm.linear.C20.sub <- svm(Type~Proline+Color+Flavanoids, data=training.set, kernel="linear", cost=20) 
+@
+Wykresy dwóch modelów SVM dla $ C = 20 $ dla Zmiennych $Proline$ i $Color$
+% e58
+<< e58, echo=FALSE, warning=FALSE,message=FALSE, fig.cap="C=20, Zmienne występujące">>=
+par(mfrow=c(1,2), mar=c(3.8,3.8,3.8,2))
+plot(svm.linear.C20.all, data=training.set, Proline~Color, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 1 - C = 20")
+plot(svm.linear.C20.sub, data=training.set, Proline~Color, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 2 - C = 20")
+@
+Oraz dla tej samej wartości C, ale dla zmiennych $Proline$ i $Hue$
+% e59
+<< e59, echo=FALSE, warning=FALSE,message=FALSE, fig.cap="C=20, Jedna zmienna niewystępująca">>=
+par(mfrow=c(1,2), mar=c(3.8,3.8,3.8,2))
+plot(svm.linear.C20.all, data=training.set, Proline~Hue, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 1 - C = 20")
+plot(svm.linear.C20.sub, data=training.set, Proline~Hue, svSymbol=15, grid=100,col = c("grey", "coral1", "aquamarine2"),
+     main = "SVM Model 2 - C = 20")
+@
+\end{itemize}
+Wnioski po wykresach: 
+\begin{itemize}
+\item W obu przypadkach mocno mieszają się Wina o Typach 2 oraz 3( czerowny i zielony), 
+\item Najgorzej dopasowany parametr kosztu w obu przypadkach występuje dla wartośći C = 20
+\item Podział klasyfikacyjny na 3 klasy jest prawie niewidoczny na wykresie zależnośći Proline i Hue, gorzej jednak wygląda to w przypadku modelu 2
+\item Natomiast na wykresie zależności Proline i Colors lepszym modelem wydaje się ten skonstruowany na 3 zmiennych, a najlepszym parametrem C jest $0.1$
+\end{itemize}
+Porównajmy, czy nasze obserwacje potwierdzają się w obliczeniach. Rozważmy zbiór testowy dla obu modeli, róznych zmiennych C i sprawdźmy prognozy i ich dokładności
+\begin{itemize}
+\item Parametr kosztu: C = 0.1
+% e6
+<< e6, echo=FALSE, warning=FALSE,message=FALSE >>=
+real.labels <- test.set$Type
+n.test <- length(real.labels)
+
+pred.svm.lin.C0.1.all <- predict(svm.linear.C0.1.all, newdata=test.set)
+print("Model 1 --- C=0.1")
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C0.1.all, real.labels)))/n.test)
+pred.svm.lin.C0.1.sub <- predict(svm.linear.C0.1.sub, newdata=test.set)
+print("Model 2 --- C=0.1")
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C0.1.sub, real.labels)))/n.test)
+
+@
+\item Parametr kosztu C = 1
+% e7
+<< e7, echo=FALSE, warning=FALSE,message=FALSE >>=
+pred.svm.lin.C1.all <- predict(svm.linear.C1.all, newdata=test.set)
+print("Model 1 --- C=1")
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C1.all, real.labels)))/n.test)
+pred.svm.lin.C1.sub <- predict(svm.linear.C1.sub, newdata=test.set)
+print("Model 2 --- C=1")
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C1.sub, real.labels)))/n.test)
+@
+
+\item Parametr kosztu C = 20
+% e8
+<< e8, echo=FALSE, warning=FALSE,message=FALSE >>=
+pred.svm.lin.C20.all <-predict(svm.linear.C20.all, newdata=test.set)
+print("Model 1 --- C=20")
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C1.all, real.labels)))/n.test)
+pred.svm.lin.C20.sub <- predict(svm.linear.C20.sub, newdata=test.set)
+print("Model 2 --- C=20")
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C20.sub, real.labels)))/n.test)
+@
+Test innego modelu zbudowanego na zmiennej Flavanoids i Nonflavanoids - najlepsze zdolności dyskryminacyjne
+% e9
+<< e9, echo=FALSE, warning=FALSE,message=FALSE >>=
+svm.linear.C0.1.sub1 <- svm(Type~Flavanoids+Nonflavanoids, data=training.set, kernel="linear", cost=0.1) 
+svm.linear.C1.sub1 <- svm(Type~Flavanoids+Nonflavanoids, data=training.set, kernel="linear", cost=1) 
+svm.linear.C20.sub1 <- svm(Type~Flavanoids+Nonflavanoids, data=training.set, kernel="linear", cost=20) 
+pred.svm.lin.C0.1.sub1 <- predict(svm.linear.C0.1.sub1, newdata=test.set)
+print("Model 3 --- C=0.1")
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C0.1.sub1, real.labels)))/n.test)
+pred.svm.lin.C1.sub1 <- predict(svm.linear.C1.sub1, newdata=test.set)
+print("Model 3 --- C=1")
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C1.sub1, real.labels)))/n.test)
+pred.svm.lin.C20.sub1 <- predict(svm.linear.C20.sub1, newdata=test.set)
+print("Model 3 --- C=20")
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C20.sub1, real.labels)))/n.test)
+@
+\end{itemize}
+Wnioski:
+- Najlepszym parametrem dla tego jądra okazała się wartośc C = 1 w przypadku trzech modeli
+- Wahania niedopasowań dla różnych modeli są na poziomie $2 - 4\%$
+- Widzimy, że otrzymujemy bardzo dobre przewidywanie już na modelu zbudowanym przez 3 cechy
+- Dla całego zbioru najlepszy parametr kosztu jest na poziomie 0.1, natomiast dla modelu 2 w okolicach 1
+\subsubsection{SVM - badanie różnych jąder do budowania klasyfikatorów}
+Będziemy rozważać jądro liniowe z parametrem C = 1, wielomianowe(wykrzywia prostą) oraz radialne dla 3 modeli zaproponowanych wcześniej.
+\newline 
+Model 1:
+% e10
+<< e10, echo=FALSE, warning=FALSE,message=FALSE >>=
+#1.  cały zbiór
+print("Model 1 --- C=1, jądro liniowe")
+svm.linear.C1.all <- svm(Type~., data=training.set, kernel="linear", cost=1) 
+pred.svm.lin.C1.all <- predict(svm.linear.C1.all, newdata=test.set)
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C1.all, real.labels)))/n.test)
+print("Model 1 --- st.wielomianu=1, jądro wielomianowe")
+svm.poly1.all <- svm(Type~., data=training.set, kernel="polynomial", degree = 1)
+pred.svm.poly1.all  <- predict(svm.poly1.all, newdata=test.set)
+(acc.svm.poly1.all  <- sum(diag(table(pred.svm.poly1.all, real.labels)))/n.test)
+print("Model 1 --- st.wielomianu=5, jądro wielomianowe")
+svm.poly5.all  <- svm(Type~., data=training.set, kernel="polynomial", degree = 5)
+pred.svm.poly5.all  <- predict(svm.poly5.all, newdata=test.set)
+(acc.svm.poly5.all <- sum(diag(table(pred.svm.poly5.all, real.labels)))/n.test)
+print("Model 1 --- gamma=0.1, jądro radialne")
+svm.radial.gamma0.1.all <- svm(Type~., data=training.set, kernel="radial", gamma=0.1)
+pred.svm.gamma0.1.all <- predict(svm.radial.gamma0.1.all, newdata=test.set)
+(acc.svm.radial <- sum(diag(table(pred.svm.gamma0.1.all, real.labels)))/n.test)
+print("Model 1 --- gamma=1, jądro radialne")
+svm.radial.gamma1.all <- svm(Type~., data=training.set, kernel="radial", gamma=1)
+pred.svm.gamma1.all <- predict(svm.radial.gamma1.all, newdata=test.set)
+(acc.svm.radial <- sum(diag(table(pred.svm.gamma1.all, real.labels)))/n.test)
+@
+
+Model 2:
+% e11
+<< e11, echo=FALSE, warning=FALSE,message=FALSE >>=
+#2. zmienne Proline, Color, Flavanoids
+print("Model 2 --- C=1, jądro liniowe")
+svm.linear.C1.sub <- svm(Type~Proline+Color+Flavanoids, data=training.set, kernel="linear", cost=1)
+pred.svm.lin.C1.sub <- predict(svm.linear.C1.sub, newdata=test.set)
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C1.sub, real.labels)))/n.test)
+print("Model 2 --- st.wielomianu=1, jądro wielomianowe")
+svm.poly1.sub <- svm(Type~Proline+Color+Flavanoids, data=training.set, kernel="polynomial", degree = 1)
+pred.svm.poly1.sub  <- predict(svm.poly1.sub, newdata=test.set)
+(acc.svm.poly1.sub  <- sum(diag(table(pred.svm.poly1.sub, real.labels)))/n.test)
+print("Model 2 --- st.wielomianu=5, jądro wielomianowe")
+svm.poly5.sub  <- svm(Type~Proline+Color+Flavanoids, data=training.set, kernel="polynomial", degree = 5)
+pred.svm.poly5.sub  <- predict(svm.poly5.sub, newdata=test.set)
+(acc.svm.poly5.sub  <- sum(diag(table(pred.svm.poly5.sub, real.labels)))/n.test)
+print("Model 2 --- gamma=0.1, jądro radialne")
+svm.radial.gamma0.1.sub <- svm(Type~Proline+Color+Flavanoids, data=training.set, kernel="radial", gamma=0.1)
+pred.svm.gamma0.1.sub <- predict(svm.radial.gamma0.1.sub, newdata=test.set)
+(acc.svm.radial <- sum(diag(table(pred.svm.gamma0.1.sub, real.labels)))/n.test)
+print("Model 2 --- gamma=1, jądro radialne")
+svm.radial.gamma1.sub <- svm(Type~Proline+Color+Flavanoids, data=training.set, kernel="radial", gamma=1)
+pred.svm.gamma1.sub <- predict(svm.radial.gamma1.sub, newdata=test.set)
+(acc.svm.radial <- sum(diag(table(pred.svm.gamma1.sub, real.labels)))/n.test)
+@
+Model 3:
+% e12
+<< e12, echo=FALSE, warning=FALSE,message=FALSE >>=
+#3.  zmienne Flavanoids, Nonflavanoids
+print("Model 3 --- C=1, jądro liniowe")
+svm.linear.C1.sub1 <- svm(Type~Flavanoids+Nonflavanoids, data=training.set, kernel="linear", cost=1)
+pred.svm.lin.C1.sub1 <- predict(svm.linear.C1.sub1, newdata=test.set)
+(acc.svm.lin   <- sum(diag(table(pred.svm.lin.C1.sub1, real.labels)))/n.test)
+print("Model 3 --- st.wielomianu=1, jądro wielomianowe")
+svm.poly1.sub1 <- svm(Type~Flavanoids+Nonflavanoids, data=training.set, kernel="polynomial", degree = 1)
+pred.svm.poly1.sub1  <- predict(svm.poly1.sub1, newdata=test.set)
+(acc.svm.poly1.sub1  <- sum(diag(table(pred.svm.poly1.sub1, real.labels)))/n.test)
+print("Model 3 --- st.wielomianu=5, jądro wielomianowe")
+svm.poly5.sub1  <- svm(Type~Flavanoids+Nonflavanoids, data=training.set, kernel="polynomial", degree = 5)
+pred.svm.poly5.sub1  <- predict(svm.poly5.sub1, newdata=test.set)
+(acc.svm.poly5.sub1  <- sum(diag(table(pred.svm.poly5.sub1, real.labels)))/n.test)
+print("Model 3 --- gamma=0.1, jądro radialne")
+svm.radial.gamma0.1.sub1<- svm(Type~Flavanoids+Nonflavanoids, data=training.set, kernel="radial", gamma=0.1)
+pred.svm.gamma0.1.sub1 <- predict(svm.radial.gamma0.1.sub1, newdata=test.set)
+(acc.svm.radial <- sum(diag(table(pred.svm.gamma0.1.sub1, real.labels)))/n.test)
+print("Model 3 --- gamma=1, jądro radialne")
+svm.radial.gamma1.sub1 <- svm(Type~Flavanoids+Nonflavanoids, data=training.set, kernel="radial", gamma=1)
+pred.svm.gamma1.sub1 <- predict(svm.radial.gamma1.sub1, newdata=test.set)
+(acc.svm.radial <- sum(diag(table(pred.svm.gamma1.sub1, real.labels)))/n.test)
+
+@
+Wnioski:
+\begin{itemize}
+\item Dla wielu modeli najlepiej spisuje się jądro radialne z parametrem gamma = 0.1
+\item Jądro uależnione od stopnia wielomianu jest abrdzo wrażliwe na jego stopień
+\item O dziwo jądro liniowe spisuje się bardzo dobrze, więc możemy uznać że nasze dane dzielą się dobrze klasowo, iż można je podzielić liną prostą i stworzymy w miarę dobry model podziału
+\end{itemize}
+\subsubsection{SVM - optymalizacja parametrów gamma i C w jądrze radialnym}
+Rozważmy tylko model 3, w którym możemy zobaczyć największą różnicę w wyborze tych parametrów
+% e13
+<< e13, echo=FALSE, warning=FALSE,message=FALSE >>=
+real.labels <- test.set$Type
+n.test <- length(real.labels)
+C.range <- 2^((-4):4)
+
+linear.tune <- tune(svm, train.x=training.set[,c("Flavanoids", "Nonflavanoids")],
+                    train.y=training.set[,"Type"],
+                    kernel="linear", ranges=list(cost=C.range))
+gamma.range <- 2^((-8):4)
+radial.tune <- tune(svm, train.x=training.set[,c("Flavanoids", "Nonflavanoids")],
+                    train.y=training.set[,"Type"],
+                    kernel="radial",
+                    ranges=list(cost=C.range, gamma=gamma.range))
+
+C.best <- radial.tune$best.parameters[["cost"]]
+gamma.best <- radial.tune$best.parameters[["gamma"]]
+svm.radial.tuned <- svm(Type~Nonflavanoids+Flavanoids,
+                        data=training.set, kernel="radial",
+                        cost=C.best, gamma=gamma.best)
+print("Model 3 --- najlepsza C = 4, najlepsza gamma = 1")
+print("Najlepsza metoda przewidywań:")
+pred.svm.radial.tuned <- predict(svm.radial.tuned, newdata=test.set)
+(acc.svm.radial <- sum(diag(table(pred.svm.radial.tuned, real.labels)))/n.test)
+@
+Wniosek: Jako, że rozważaliśmy gamma = 1 dla tego modelu zauważamy, że zmienna C nie ma dużego wpływu w tym modelu podobnie było gdy rozważaliśmy tylko dla jądra liniowego
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Zadanie 2 - Analiza skupień}
+W tym zadaniu rozważymy działanie algorytmów na bazie analizy skupień, gdzie porównamy jakość grupowania wybranych metod (algorytm grupujący PAM i hierarchiczny AGNES) i wybierzemy optymalne parametry dla danych metod.
+\subsection{Analiza skupień - algorytm grupujący (PAM)}
+Algorytm Grupujący PAM, inaczej K-medoidów wykorzystuje inne miary odległości między obiektami niż k-średnich, co wpływa na lepsze poszukiwanie zależności w modelach z większą róznicą między odległościami, jendka za cenę wyższej złożoności obliczeniowej. Metoda działania algorytmu PAM:
+\begin{itemize}
+\item Zainicjujemy algorytm wybierając losowe obiekty jako medoidy/centra/reprezentantów grup.
+\item Dla wszystkich obiektów wyznaczymy ich przypisanie na zasadzie odległości od najbliższego medoidu. 
+\item Dla każdej grupy, sprawdzamy czy inny obiekt z tej grupy nie ma mniejszej sumy odległości od wszystkich pozostałych w tej grupie. Jeżeli tak, to to on powinien być nowym medoidem. 
+\item Powtarzamy kroki 2-3 tak długo póki zmienia się przypisanie do grup.
+\end{itemize}
+\subsubsection{Wizualizacja wyników grupowania}
+Wprowadzamy zmienne i standaryzujemy je:
+% tt1
+<< tt1, echo=TRUE, warning=FALSE,message=FALSE >>=
+library(HDclassif)
+data(wine)
+colnames(wine) <- c('Type', 'Alcohol', 'Malic', 'Ash', 
+                      'Alcalinity', 'Magnesium', 'Phenols', 
+                      'Flavanoids', 'Nonflavanoids',
+                      'Proanthocyanins', 'Color', 'Hue', 
+                      'Dilution', 'Proline')
+wine$Type <- as.factor(wine$Type)
+etykietki<-wine$Type
+etykietki<-data.frame(etykietki)
+wine1<-wine[,-1]
+wine1<-scale(wine1)
+wine1<-data.frame(wine1)
+@
+
+% tt3
+<< tt3, echo=FALSE, warning=FALSE,message=FALSE >>=
+wine2<-cbind(etykietki,wine1)
+library(factoextra)
+library(backports)
+library(MASS)
+library(cluster)
+@
+Tworzymy nasz model PAM dla liczby klas równej 3, gdyż mamy znienną klasyfikującą TYPE określającą trzy odmiany wina, zobaczymy czy istnieje taki podział stowrozny przez algorytm grupujący i jak ma się on do realnych klas, następnie zaczniemy testować, czy może istnieją inne skupienia naszego zbioru:
+
+% tt2
+<< tt2, echo=FALSE, warning=FALSE,message=FALSE >>=
+
+wine.dissimilarity <- daisy(wine1)
+# konwersja na macierz
+wina.MacNiepodob <- as.matrix(wine.dissimilarity)
+
+wine.pam3 <- pam(x=wina.MacNiepodob, diss=TRUE, k=3)
+print("Wartości odpowiednich przyporządkowań i ich dopasowanie (-1,1) do klastera")
+plot(wine.pam3)
+@
+Widzimy, że przy wyborze klasy cluster 2 istnieje mieszanie się sąsiadów z grupy 1. Na wysokim poziomie  $+/- 0.4$ są odległości podobieństwa w klasie 3(analiza na podstawie funckji wine.pam3$silinfo ), najgorzej w tym wypada klasa2. Sprawdźmy, czy informacje z wykresu zgodzą się z naszymi obserwacjami.
+\subsubsection{Interpretacja wyników i ocena dokładności}
+% tt4
+<< tt4, echo=FALSE, warning=FALSE,message=FALSE >>=
+etykietki.pam3 <- wine.pam3$clustering
+@
+Zobaczmy jak wygląda podział na odpowiednie klasy(clustery) w wykresie zależności $Proline$ i $Color$
+% tt7
+<< tt7, echo=FALSE, warning=FALSE,message=FALSE, fig.cap="">>=
+symbole <- 0:3
+plot(wine1$Proline, wine1$Color,col=etykietki.pam3,xlab="Proline",ylab="Color", pch=symbole[wine$Type])
+title("Dane o winach -- wizualizacja wynikow analizy skupień \n dla zmiennych Proline i Colors")
+legend(x="bottomright", pch=symbole, legend=levels(wine$Type))
+@
+Popatrzmy jak można to lepiej przedstawić, skonstruujemy model oparty na metodzie MDS(moglibyśmy PCA, bo mamy same liczbowe) i zobaczymy jak wygląda rzeczywisty podział do algorytmu grupującego za pomocą wykresu rozproszenia
+% tt8
+<< tt8, echo=FALSE, warning=FALSE,message=FALSE, fig.cap="Wizualizacja K=3">>=
+wine.MDS <- cmdscale(d=wina.MacNiepodob, k=3)
+
+symbole <- 0:3
+plot(wine.MDS[,1], wine.MDS[,2], col=etykietki.pam3, pch=symbole[wine$Type])
+title("Wizualizacja klast w porównaniu \n do rzeczywistych przynależności")
+legend(x="bottomright", pch=symbole, legend=levels(wine$Type))
+@
+Sprawdźmy jak wygląda nasz model. Nasze medoidy oraz porównanie ile elementów dobrze trafiło do swojej klasy. 
+% tt9
+<< tt9, echo=FALSE, warning=FALSE,message=FALSE >>=
+print("Medoidy dla K=3 (odpowiednie wiersze):")
+wine.pam3$medoids
+
+by(wine$Type, wine.pam3$clustering, FUN=table)
+@
+Rzeczywiście klasa druga miesza się z pierwszą przez co typ wina o numerze 1 wydaje się najliczniejszy, a w naszych danych to wina o typie 2 jest najwięcej. Sprawdźmy w ilu procentach nasze zmienne się zgadzają co do rzeczywistych typów:
+% tt11
+<< tt11, echo=FALSE, warning=FALSE,message=FALSE >>=
+etykietki.pam3 <- wine.pam3$cluster
+etykietki.rzeczywiste <- wine$Type
+
+(tab <- table(etykietki.pam3, etykietki.rzeczywiste))
+
+library(e1071)
+# miary zgodności partycji
+matchClasses(tab)
+compareMatchedClasses(etykietki.pam3, etykietki.rzeczywiste)$diag
+
+@
+\newline
+Porównajmy boxploty wybranych cech przyrównując przydział z algorytmu, a rzeczywista klasa:
+% tt10
+<< tt10, echo=FALSE, warning=FALSE,message=FALSE >>=
+par(mfrow=c(2,2))
+boxplot(wine1$Proline~wine$Type, main="Rzeczywiste klasy", xlab = "Type", ylab = "Proline")
+boxplot(wine1$Proline~wine.pam3$clustering, main="Klastry algorytmu", xlab = "Klastry", ylab = "Proline")
+boxplot(wine1$Nonflavanoids~wine$Type, main="Rzeczywiste klasy", xlab = "Type", ylab = "Nonflavanoids")
+boxplot(wine1$Nonflavanoids~wine.pam3$clustering, main="Klastry algorytmu", xlab = "Klastry", ylab = "Nonflavanoids")
+
+@
+Możemy zauważyć, że algorytm wprowadzał większą róznicę między klasami 1,2,3, jednak z dużym przybliżeniem możemy uznać, że dobrze odwzorowuje odpowiednie cechy danych. 
+
+Zobaczmy jak wyglądają odpowiednie podobieństwa, średnie odległośći i obliczymy informacje o sylwetce zgodnie z danym klastrem w 3 klastrach:
+
+% tt13
+<< tt13, echo=FALSE, warning=FALSE,message=FALSE >>=
+sylwetka <- silhouette(wine.pam3$clustering, wina.MacNiepodob)
+print("pierwsze 6 rekordów i ich przynależności klastrowe")
+sylwetka[1:6,]
+fviz_silhouette(sylwetka)
+@
+Ważnym aspektem jest również ilość elementów w danym podziale, jednorodność, zwartość, separacja oraz ich średnie wartości dla K=3: 
+% tt101
+<< tt101, echo=TRUE, warning=FALSE,message=FALSE >>=
+wine.pam3$clusinfo
+summary(wine.pam3$clusinfo)
+@
+Zastanówmy się teraz, co gdybyśmy nie znali 3 typów win, a mielibyśmy za zadanie przeanalizować ten zbiór danych i stworzyć optymalną liczbę klas win, żeby odzwierciedlały jak najwięcej informacji o winach w tej klasie, pamiętając że klient nie lubi analizować zbyt wielu rodzajów win, czy istnieje lepszy z jeszcze mnijeszymi odległościami?
+
+% tt14
+<< tt14, echo=FALSE, warning=FALSE,message=FALSE >>=
+Within   <- c()
+Between  <- c()
+Total    <- c()
+
+K.zakres <- 1:10
+
+for (k in K.zakres)
+{
+  print(k)
+  kmeans.k  <- kmeans(wine1, centers=k, iter.max=10, nstart=10)
+  Within  <- c(Within, kmeans.k$tot.withinss)	# total within-cluster sum of squares =  sum(withinss))
+  Between <- c(Between, kmeans.k$betweenss) # between-cluster sum of squares
+  Total   <- c(Total,kmeans.k$totss) 	# total sum of squares.
+  #Total == Within + Between
+}
+
+y.zakres <- range(c(Within,Between, Total))
+par(mar=c(2,2,2,2))
+plot(K.zakres,  Within, col="red", type="b", lwd=2, xlab="K", ylim=y.zakres, ylab="B/W")
+lines(K.zakres,  Between, col="blue", lwd=2, type="b")
+legend(3, 360, legend=c( "Wewnatrz skupien","Pomiedzy skupieniami"), 
+       lwd=2, col=c("red","blue"), bg="azure2")
+grid()
+title("Rozrzuty wewnatrz skupien i pomiedzy skupieniami")
+@
+Po analizie rozrzutu możemy przyjąć że klas K powinno być coś między 3 lub 4, gdyż przy tej wartośći ich funckje zaczynają się wypłaszczać. Sprawdźmy za pomocą silhouette szukając optymalnego K:
+% tt15
+<< tt15, echo=FALSE, warning=FALSE,message=FALSE >>=
+fviz_nbclust(wine1, FUNcluster = kmeans, method = "silhouette")
+@
+Widzimy, że nasz model okazał się najlepszy i kolejne clustry nie przyniosą takiej róźnorodnośći danych, a mogą zaburzyć zaproponowany porządek.
+Zweryfikujmy czy tak się dzieje np dla K = 4 oraz 7:
+
+% tt16
+<< tt16, echo=FALSE, warning=FALSE,message=FALSE, fig.cap="Wizualizacja">>=
+wine.pam4 <- pam(x=wina.MacNiepodob, diss=TRUE, k=4)
+wine.pam7 <- pam(x=wina.MacNiepodob, diss=TRUE, k=7)
+wine.MDS4 <- cmdscale(d=wina.MacNiepodob, k=4)
+wine.MDS7 <- cmdscale(d=wina.MacNiepodob, k=7)
+etykietki.pam4 <- wine.pam4$clustering
+etykietki.pam7 <- wine.pam7$clustering
+symbole <- 0:4
+plot(wine.MDS4[,1], wine.MDS4[,2], col=etykietki.pam4, pch=symbole[wine$Type])
+title("Wizualizacja klastr \n i rzeczywistych klas k=4")
+legend(x="bottomright", pch=symbole, legend=levels(wine$Type))
+symbole <- 0:7
+plot(wine.MDS7[,1], wine.MDS7[,2], col=etykietki.pam7, pch=symbole[wine$Type])
+title("Wizualizacja klastr  \n i rzeczywistych klas k=7")
+legend(x="bottomright", pch=symbole, legend=levels(wine$Type))
+@
+Widzimy, żę powstają odrębne klastry wcześniejszych klastr. W przypadku K=4 wyodrębnia się dodatkowy podział w TYPE 1. A jak wyglądają inne parametry?
+\newline Dla K = 4:
+% tt17
+<< tt17, echo=TRUE, warning=FALSE,message=FALSE>>=
+sylwetka <- silhouette(wine.pam4$clustering, wina.MacNiepodob)
+print("pierwsze 6 rekordów i ich przynależności klastrowe K=4")
+sylwetka[1:6,]
+fviz_silhouette(sylwetka)
+wine.pam4$clusinfo
+summary(wine.pam4$clusinfo)
+@
+Mniejsza separacja klastrowa, przynależności do klastra 2 jest bardzo losowa, nadal dostajemy dobry podział na TYPE 2,3 porównując do rzeczywistych wartości, spadek średniej wartości silhouette na poziomie 0.2, gdzie dla K=3 było to w okolicach 0.27,  co dzieje się dla K=7?
+\newline K = 7
+% tt18
+<< tt18, echo=TRUE, warning=FALSE,message=FALSE>>=
+sylwetka <- silhouette(wine.pam7$clustering, wina.MacNiepodob)
+print("pierwsze 6 rekordów i ich przynależności klastrowe K=7")
+sylwetka[1:6,]
+fviz_silhouette(sylwetka)
+wine.pam7$clusinfo
+summary(wine.pam7$clusinfo)
+@
+Stworzenie co najmniej po dwa podzbiory zbiorów wyjściowych, jednak gdybyśmy nie znali ich wcześniej ciężko byłoby uznać je za jedną klasę win, dlatego taki podział jest mało optymalny, dodatkowo klastry oznaczone numerami 2 i 3 mają dużą skalę błedów(ujemne wartości na wykresie), przypuszczalnie jest to pozostałość po mieszaniu się wyjściowych typów win o numerach 1 i 2. Oczywiście znaczne zmiejszenie odległości separacji i ich średnic. Dużo niższa średnia wartość silhouette na poziomie 0.12
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Algorytm hierarchiczny - AGNES}
+\subsubsection{Wizualizacja danych}
+% e22
+<< e22, echo=FALSE, warning=FALSE,message=FALSE >>=
+library(factoextra)
+dane <- wine1
+wine.agnes.com <- agnes(dane, metric="euclidean", method="complete", stand=TRUE)
+wine.agnes.com.K3 <- cutree(wine.agnes.com, k=3)
+wine.agnes.sin <- agnes(dane, metric="euclidean", method="single", stand=TRUE)
+wine.agnes.sin.K3 <- cutree(wine.agnes.sin, k=3)
+wine.agnes.avg <- agnes(dane, metric="euclidean", method="average", stand=TRUE)
+wine.agnes.avg.K3 <- cutree(wine.agnes.avg, k=3)
+fviz_dend(wine.agnes.avg, k=3,main="Odległość średnia")
+fviz_cluster(list(data=dane, cluster=wine.agnes.avg.K3), main="Odległość średnia")
+fviz_dend(wine.agnes.com, k=3, main="Odległość najdalszego sąsiada")
+fviz_cluster(list(data=dane, cluster=wine.agnes.com.K3), main="Odległość najdalszego sąsiada")
+fviz_dend(wine.agnes.sin, k=3, main="Odległość najbliższego sąsiada")
+fviz_cluster(list(data=dane, cluster=wine.agnes.sin.K3), main="Odległość najbliższego sąsiada")
+@
+
+
+Obserwacje i wnioski:
+\begin{itemize}
+\item Odległość średnia: Jedna, całkowicie dominująca klasa. Wewnątrz tego skupienia mamy 3 mniejsze, co świadczy o zwartości. Jednak proponowany podział kompletnie nie odzwierciedla faktycznego podziału na klasy, nie ma między nimi żadnego powiązania. 
+\item Odległość najdalszego sąsiada: Wydaje się być najbardziej optymalna dla naszych danych. 3 klasy, bez wyraźnej dominacji którejkolwiek z nich. Na wykresie rozrzutu widać wyraźną separację klasy 3 od 1 i 2, które nakładają się na siebie.
+\item Odległość najbliższego sąsiada: Niemal identyczna sytuacja jak w przypadku odległości średniej. 
+\end{itemize}
+Wobec powyższego w dalszej analizie będziemy się posługiwać odległością najdalszego sąsiada. Sprawdźmy rzeczywistą przynależność obiektów do klas. 
+% e2112
+<< e2112, echo=FALSE, warning=FALSE,message=FALSE >>=
+agnes.wine <- agnes(wine1, method = "complete")
+dendrogram.wine <- as.dendrogram(agnes.wine)
+# kolory == rzeczywiste klasy
+etykietki.kolory <- as.numeric(wine$Type) # 1, 2 lub 3
+
+# sortujemy kolory zgodnie z kolejnością obieków  w dendrogramie
+kolory.obiektow <- etykietki.kolory[agnes.wine$order]
+
+# dendrogram + kolory odpowiadające rzeczyiwstym klasom
+fviz_dend(dendrogram.wine, cex=0.5, type = "circular", label_cols=kolory.obiektow, main="Kolory = rzeczywiste klasy")
+
+# Porównanie: partycja na 3 skupienia vs. rzeczywiste klasy
+fviz_dend(dendrogram.wine, cex=0.5, k=3, type='circular',  label_cols=kolory.obiektow, k_colors=c("grey","orange","blue"),main="Partycja na 3 skupienia vs. rzeczywiste klasy", rect = T, lower_rect=-0.5, rect_fill=TRUE, rect_border =c("grey","orange","blue"))
+@
+Wnioski:
+\begin{itemize}
+\item Gołym okiem widać, że większość danych została dobrze rozdzielona. Klasa 2 została w 100\% wrzucona do jednego skupienia, w pozostałych dwóch popawność spada, jednak wciąż jest na doć wysokim poziomie. 
+\end{itemize}
+
+\subsubsection{Wybór optymalnego K - AGNES}
+
+Wyznaczmy najpierw średnie wartości {\em silhouette} dla {\bf K} należącego do zbioru od 2 do 6.
+%f21
+<<f21, echo=FALSE, eval=TRUE,fig=TRUE>>=
+wine.agnes.com.K2 <- cutree(wine.agnes.com, k=2)
+wine.agnes.com.K3 <- cutree(wine.agnes.com, k=3)
+wine.agnes.com.K4 <- cutree(wine.agnes.com, k=4)
+wine.agnes.com.K5 <- cutree(wine.agnes.com, k=5)
+wine.agnes.com.K6 <- cutree(wine.agnes.com, k=6)
+
+sil.agnes.comp.k2 <- silhouette(x=wine.agnes.com.K2, dist=wina.MacNiepodob)
+sil.agnes.comp.k3 <- silhouette(x=wine.agnes.com.K3, dist=wina.MacNiepodob)
+sil.agnes.comp.k4 <- silhouette(x=wine.agnes.com.K4, dist=wina.MacNiepodob)
+sil.agnes.comp.k5 <- silhouette(x=wine.agnes.com.K5, dist=wina.MacNiepodob)
+sil.agnes.comp.k6 <- silhouette(x=wine.agnes.com.K6, dist=wina.MacNiepodob)
+
+
+sill.agn2<-summary(sil.agnes.comp.k2)$avg.width
+sill.agn3<-summary(sil.agnes.comp.k3)$avg.width
+sill.agn4<-summary(sil.agnes.comp.k4)$avg.width
+sill.agn5<-summary(sil.agnes.comp.k5)$avg.width
+sill.agn6<-summary(sil.agnes.comp.k6)$avg.width
+sil.agn.all<-c(sill.agn2,sill.agn3,sill.agn4,sill.agn5,sill.agn6)
+
+plot(c(2:6),sil.agn.all,pch=16)
+@
+
+Porównajmy teraz wyniki grupowania z rzeczywistą przynależnością do klas
+
+%f22
+<<f22, echo=FALSE, eval=TRUE,fig=TRUE>>=
+library(e1071)
+rzeczywiste.etykietki<-wine$Type
+lepsze.wine.agnes.com <- agnes(x=wina.MacNiepodob,diss=TRUE, method="complete")
+lepsze.wine.agnes.com.K2 <- cutree(lepsze.wine.agnes.com, k=2)
+lepsze.wine.agnes.com.K3 <- cutree(lepsze.wine.agnes.com, k=3)
+lepsze.wine.agnes.com.K4 <- cutree(lepsze.wine.agnes.com, k=4)
+lepsze.wine.agnes.com.K5 <- cutree(lepsze.wine.agnes.com, k=5)
+lepsze.wine.agnes.com.K6 <- cutree(lepsze.wine.agnes.com, k=6)
+diag.agn21<-compareMatchedClasses(rzeczywiste.etykietki,lepsze.wine.agnes.com.K2,method = "rowmax")$diag
+diag.agn31<-compareMatchedClasses(lepsze.wine.agnes.com.K3,rzeczywiste.etykietki,method = "rowmax")$diag
+diag.agn41<-compareMatchedClasses(lepsze.wine.agnes.com.K4,rzeczywiste.etykietki,method = "rowmax")$diag
+diag.agn51<-compareMatchedClasses(lepsze.wine.agnes.com.K5,rzeczywiste.etykietki,method = "rowmax")$diag
+diag.agn61<-compareMatchedClasses(lepsze.wine.agnes.com.K6,rzeczywiste.etykietki,method = "rowmax")$diag
+
+diag.agn.all<-c(diag.agn21,diag.agn31,diag.agn41,diag.agn51,diag.agn61)
+
+plot(c(2:6),diag.agn.all,main="Zgodność z rzeczywistą przynależnością do klas",pch=16)
+
+@
+Podział na 3 klasy ma zgodność na poziomie ponad 80\%, dzięki czemu wprowadzanie dodatkowych klas byłoby zbędnym procesem zmniejszającym przejrzystość. 
+%f212
+<<f212, echo=FALSE, eval=TRUE,fig=TRUE, fig.cap="Podział na skupienia dla K=2 AGNES">>=
+wine.agnes.com2 <- agnes(wine1, metric="euclidean", method="complete", stand=TRUE)
+wine.agnes.K2.com <- cutree(wine.agnes.com2, k=3)
+fviz_cluster(list(data=wine1, cluster=wine.agnes.K2.com))
+@
+
+Ostateczne wnioski:
+\begin{itemize}
+\item Metoda PAM dla K=3 ma zgodność z rzeczywistą przynależnością do klas na poziomie 91\%, co jest lepszym wynikiem niż w przypadku metody AGNES, której zgodność wynosi lekko ponad 80\%. 
+\end{document}
